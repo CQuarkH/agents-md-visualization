@@ -73,10 +73,17 @@ Independientemente de la variante utilizada, el esquema de salida unificado es e
 ```
 
 ### Variante A: LLM Local (`scripts/2a_extract_json_llm.py`)
-Utiliza un modelo Local Small Language Model (SLM) iterando con un servidor compatible (ej. LMStudio con Qwen 2.5).
+Utiliza un modelo Local Small Language Model (SLM) iterando con un servidor compatible (ej. LMStudio con Qwen 3.5).
 - **Proceso**: El script extrae el bloque de metadatos del archivo y le pasa el texto en crudo al modelo junto con el diccionario maestro de categorías. Luego parsea la salida en crudo garantizando la estructura dictada de JSON.
 - **Input**: Archivos `.md` de `dataset/enriched_agents/`.
 - **Output**: Árboles JSON guardados en `dataset/json_trees/llm/`.
+
+### Sub-Variante 2A: SLM vía OpenRouter (`scripts/2a_openrouter_extract_json.py`)
+Utiliza un SLM de última generación (ej. `qwen/qwen-3.5-9b`) remotamente pasando a través de la API ruteada de OpenRouter, pero preservando la compatibilidad de "Structured Output" del cliente de OpenAI.
+- **Proceso**: Idéntico a la variante 2A local, pero forzando garantizadamente la salida estructurada a nivel de API. Se inyecta la constante `JSON_SCHEMA` (esquema JSON duro con `strict: True` y `additionalProperties: False`) en el parámetro `response_format` del cliente de OpenAI, lo que obliga al modelo a generar una compatibilidad sintáctica perfecta del AST sin alucinaciones.
+- **Dependencias y Auth**: Requiere `pip install openai` y configurar la variable de entorno `OPENROUTER_API_KEY`.
+- **Input**: Archivos `.md` de `dataset/enriched_agents/`.
+- **Output**: Árboles JSON guardados en una nueva sub-carpeta `dataset/json_trees/llm_forced_output/`.
 
 ### Variante B: AST Parser Determinista (`scripts/2b_extract_json_parser.py`)
 No utiliza IA; emplea heurísticas determinísticas y la estructura generada por **Pandoc**.
@@ -92,3 +99,32 @@ Utiliza un modelo comercial de alto rendimiento de Anthropic (Claude 4.5 Sonnet)
 - **Proceso**: Similar a la Variante A, extrae contexto y pide la estructuración JSON AST exacta. Destaca por su alta fiabilidad y capacidad intelectual. Requiere una clave de API válida.
 - **Input**: Archivos `.md` de `dataset/enriched_agents/`.
 - **Output**: Árboles JSON guardados en `dataset/json_trees/llm_api/`.
+
+## Fase 2.5: Validación de Resultados
+Para validar cuantitativamente la calidad y la veracidad de los JSON generados por las variantes de la Fase 2 (y mitigar amenazas a la validez), se ejecutan rutinas de *testing* automáticas.
+
+### Dependencias
+Para correr los scripts de validación, necesitas instalar el validador oficial de esquemas JSON de Python:
+```bash
+pip install jsonschema
+```
+
+### Script 2D: Validación Estructural (Completeness & Sintaxis)
+`src/scripts/2d_validate_json_schema.py`
+
+- **¿Qué evalúa?**: Verifica matemáticamente que los JSON generados cumplan al 100% con la estructura del AST requerida. Asegura que no falten campos obligatorios (`projectInfo`, `rootNode`), que los tipos de datos sean exactos (ej. `count` debe ser Integer), y que el LLM no haya inyectado propiedades fantasma.
+- **Métrica obtenida**: *Schema Compliance Rate* (Integridad del Formato). Las variaciones que pasan esta prueba están garantizadas para consumirse por una UI/Visualización downstream sin romper el código.
+- **Ejecución**:
+```bash
+python src/scripts/2d_validate_json_schema.py
+```
+
+### Script 2E: Validación Semántica (Ground-Truth Hallucinations)
+`src/scripts/2e_validate_categories.py`
+
+- **¿Qué evalúa?**: Funciona como un test de alucinación semántica. Lee el array de categorías base original (Ground Truth) inyectado al inicio del `.md` en la **Fase 1** y lo compara contra los nodos `category` generados en el árbol AST de la **Fase 2**. 
+- **Métrica obtenida**: *Hallucination Rate*. Detecta y lista si el LLM o el Parser "inventaron" nuevas categorías para encapsular reglas en lugar de ceñirse estrictamente al array asignado para ese repositorio.
+- **Ejecución**:
+```bash
+python src/scripts/2e_validate_categories.py
+```
