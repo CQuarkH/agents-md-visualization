@@ -128,3 +128,34 @@ python src/scripts/2d_validate_json_schema.py
 ```bash
 python src/scripts/2e_validate_categories.py
 ```
+
+## Fase 3: UI Visualization (Avance V1)
+
+El objetivo de esta fase es reducir drásticamente la carga cognitiva de leer archivos `AGENTS.md` kilométricos, transformando el JSON AST crudo en interfaces gráficas interactivas renderizadas en el navegador web.
+
+Para garantizar la integridad estricta de los datos inyectados al frontend, la arquitectura pasó de usar diccionarios crudos de Python a un **Modelo de Dominio**.
+
+### Arquitectura Orientada a Dominio (`src/domain/models.py`)
+Antes de generar cualquier gráfica, el JSON extraído es validado e instanciado imperativamente mediante **Pydantic**. 
+La clase `AgentASTDocument` actúa como el Aggregate Root. Todas las propiedades visuales (como `color`, `radio` del nodo, truncamiento de etiquetas y mapeo semántico `MUST`/`SHOULD`) están encapsuladas directamente dentro de las entidades (ej: `RuleCategory` y `AgentRule`). Esto elimina la lógica de presentación redundante (spaghetti) de los scripts de generación.
+
+### Variante 1: Grafo de Fuerza Dirigida (`scripts/3_generate_visualization.py`)
+Genera un archivo HTML interactivo con una **vista dividida (Split-View)**:
+- **Izquierda**: Muestra el documento Markdown crudo original para lectura por referencias.
+- **Derecha**: Renderiza un grafo de red usando `D3.js` (`d3.forceSimulation`). Los nodos (Reglas) orbitan dinámicamente alrededor de sus Categorías padre.
+- **Interacción**: Permite hacer Zoom, Paneo (arrastrar el lienzo) y clic sobre los nodos para abrir un panel lateral con los metadatos profundos de la regla (Formato, Intensidad, Header Original).
+
+**Ejecución:**
+```bash
+PYTHONPATH=. python src/scripts/3_generate_visualization.py dataset/json_trees/llm_forced_output/<archivo>.json
+```
+
+### Variante 2: Árbol Jerárquico Horizontal (`scripts/3b_generate_tree_visualization.py`)
+Respondiendo a sugerencias académicas para mejorar el escaneo visual de izquierda a derecha, esta variante utiliza el layout estático `d3.tree()`.
+- **Diseño**: Conecta la Raíz (Repo) con las Categorías, y estas finalmente con las Reglas Hoja en un formato de tipo "Dendrograma" estricto.
+- **Ventaja**: Elimina la física caótica de colisiones presente en la variante de red, permitiendo a los desarrolladores leer secuencialmente el árbol AST de arriba hacia abajo sin que los nodos se reorganicen solos.
+
+**Ejecución:**
+```bash
+PYTHONPATH=. python src/scripts/3b_generate_tree_visualization.py dataset/json_trees/llm_forced_output/<archivo>.json
+```
