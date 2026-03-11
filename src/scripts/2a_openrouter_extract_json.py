@@ -43,10 +43,7 @@ JSON_SCHEMA = {
         "schema": {
             "type": "object",
             "properties": {
-                "thinking_process": {
-                    "type": "string",
-                    "description": "Tu proceso de pensamiento y razonamiento antes de outputear el JSON final"
-                },
+
                 "projectInfo": {
                     "type": "object",
                     "properties": {
@@ -111,7 +108,7 @@ JSON_SCHEMA = {
                     "additionalProperties": False
                 }
             },
-            "required": ["thinking_process", "projectInfo", "rootNode"],
+            "required": ["projectInfo", "rootNode"],
             "additionalProperties": False
         }
     }
@@ -201,6 +198,9 @@ You MUST follow this exact schema for the output:
 
 For "strength", use "MUST" for strict rules/commands and "SHOULD" for recommendations.
 For "format", use "ListItem" if the instruction was a bullet point, or "Paragraph" otherwise.
+
+CRITICAL INSTRUCTION: You must output ONLY JSON. DO NOT write any thinking process.
+DO NOT use <think> tags. Start your response IMMEDIATELY with the {{ character.
 """
 
     processed_count = 0
@@ -232,6 +232,7 @@ Extract the rules based on the instructions above and return the required JSON s
                     {"role": "user", "content": user_prompt}
                 ],
                 temperature=0.0,
+                max_tokens=8192,
                 response_format=JSON_SCHEMA
             )
             
