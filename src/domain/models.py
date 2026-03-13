@@ -1,5 +1,6 @@
 from typing import List, Literal, Optional, Dict
 from pydantic import BaseModel, Field, root_validator
+import math
 
 # --- Visual Mappings ---
 CATEGORY_COLORS: Dict[str, str] = {
@@ -85,10 +86,41 @@ class RuleCategory(BaseModel):
     type: Literal["category"] = "category"
     count: int
     children: List[AgentRule] = Field(default_factory=list)
+    
+    fre_score: Optional[float] = None
 
     @property
     def color(self) -> str:
         return CATEGORY_COLORS.get(self.label, DEFAULT_CATEGORY_COLOR)
+
+    @property
+    def readability_color(self) -> str:
+        """
+        Returns a heatmap color based on the Flesch Reading Ease (FRE) score.
+        
+        Justification: FRE is a validated, widely-used metric for readability.
+        Lower scores indicate higher cognitive load (complex text), while higher
+        scores indicate easier to read text. This heatmap allows users to quickly
+        identify which categories contain dense, complex instructions that may
+        require more cognitive effort to process.
+        
+        Color mapping:
+        - Score < 30:   Red (Very Difficult / Legal/Technical text - High cognitive load)
+        - Score 30-50:  Orange (Difficult - Moderate-high cognitive load)
+        - Score 50-70:  Yellow (Fairly Difficult / Plain English - Moderate load)
+        - Score > 70:   Green/Blue (Easy - Low cognitive load)
+        """
+        if self.fre_score is None:
+            return "#94a3b8"  # Gray if not calculated
+            
+        if self.fre_score < 30:
+            return "#ef4444"  # Red - Very Difficult
+        elif self.fre_score < 50:
+            return "#f97316"  # Orange - Difficult
+        elif self.fre_score < 70:
+            return "#eab308"  # Yellow - Fairly Difficult
+        else:
+            return "#22c55e"  # Green - Easy
 
     @property
     def force_graph_radius(self) -> int:
@@ -96,7 +128,21 @@ class RuleCategory(BaseModel):
         
     @property
     def tree_graph_radius(self) -> int:
-        return 10
+        """
+        Minimum radius: 10 (for 1 child).
+        We use a slightly smaller factor to avoid breaking the tree layout, 
+        but enough to make the node stand out.
+        Examples with growth factor 3:
+        - 1 child: 10 + 3*(0) = 10
+        - 2 children: 10 + 3*(1) = 13
+        - 5 children: 10 + 3*(4) = 22
+        """
+        base_radius = 10
+        growth_factor = 3
+        
+        effective_children = max(1, self.count)
+        
+        return base_radius + (growth_factor * (effective_children - 1))
 
     @property
     def html_details(self) -> str:

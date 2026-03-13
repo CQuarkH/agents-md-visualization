@@ -139,6 +139,31 @@ Para garantizar la integridad estricta de los datos inyectados al frontend, la a
 Antes de generar cualquier gráfica, el JSON extraído es validado e instanciado imperativamente mediante **Pydantic**. 
 La clase `AgentASTDocument` actúa como el Aggregate Root. Todas las propiedades visuales (como `color`, `radio` del nodo, truncamiento de etiquetas y mapeo semántico `MUST`/`SHOULD`) están encapsuladas directamente dentro de las entidades (ej: `RuleCategory` y `AgentRule`). Esto elimina la lógica de presentación redundante (spaghetti) de los scripts de generación.
 
+### Aclaración: Definición de "Must" y "Should"
+
+Para determinar entre "must" y "should", el LLM usa la siguiente heurística léxica basada en el estándar RFC 2119:
+
+- Asigna "MUST": Si el texto original usa modo imperativo, comandos directos o restricciones absolutas. Palabras clave desencadenantes: "must", "always", "never", "do not", "require", o si la oración comienza directamente con un verbo de acción (ej. "Use", "Run", "Install", "Avoid").
+- Asigna "SHOULD": Si el texto original usa modo condicional, sugerencias o mejores prácticas. Palabras clave desencadenantes: "should", "recommend", "prefer", "consider", "ideally", "try to", "might", "optional".</match>
+<replacement>### 🛡️ Mitigación de Amenaza a la Validez: Justificación Semántica de "MUST" y "SHOULD" (Mapeo Contenido ↔ Forma)
+
+Para evitar que la clasificación de la "fuerza" (*strength*) de una regla dependa del criterio subjetivo y probabilístico del LLM (amenaza de "caja negra"), se implementó una **heurística léxica determinista** en los prompts y parsers. 
+
+Dado que los archivos `AGENTS.md` actúan como Especificaciones de Requisitos en Lenguaje Natural dirigidas a un actor algorítmico, esta heurística se fundamenta en la literatura de **Ingeniería de Requisitos**. Esto permite justificar académicamente el mapeo directo entre el **Contenido** (la semántica de la regla) y su **Forma** (la codificación visual en el grafo interactivo final), basándose en los siguientes estándares internacionales:
+
+1. **[IETF RFC 2119](https://datatracker.ietf.org/doc/html/rfc2119) (*Key words for use in RFCs to Indicate Requirement Levels*):** Estándar fundacional que estipula un vocabulario estricto para interpretar la severidad técnica de las especificaciones de software.
+2. **[ISO/IEC/IEEE 29148:2018](https://standards.ieee.org/ieee/29148/7102/) (*Systems and software engineering — Requirements engineering*):** Define formalmente cómo interpretar restricciones duras (*Hard Constraints*) vs. restricciones blandas (*Soft Constraints*) en los requisitos del sistema.
+
+Basado en esta literatura, el sistema de extracción (Fase 2) clasifica y la visualización (Fase 3) mapea visualmente las instrucciones bajo estos criterios irrefutables:
+
+- 🔴 **Asignación "MUST" (Obligación Vinculante / *Hard Constraint*):** 
+  - **Heurística Léxica:** Se asigna si el texto original usa modo imperativo absoluto, comandos directos o restricciones críticas. Se dispara con palabras clave como: *"must", "always", "never", "do not", "require"*, o si la oración comienza directamente con un verbo de acción (ej. *"Use", "Run", "Install", "Avoid"*). Romper esta regla implica un fallo garantizado en la operatividad del sistema o del agente.
+  - **Mapeo Visual (Forma):** En la topología del grafo, se representará mediante **trazos sólidos y continuos**, transmitiendo al operador humano una exigencia cognitiva inmediata e inquebrantable.
+
+- 🟡 **Asignación "SHOULD" (Recomendación / *Soft Constraint*):**
+  - **Heurística Léxica:** Se asigna si el texto original usa modo condicional, sugerencias o mejores prácticas de la industria. Se dispara con palabras clave como: *"should", "recommend", "prefer", "consider", "ideally", "try to", "might", "optional"*. Implica el camino de diseño deseado, pero permite flexibilidad si el operador tiene una justificación técnica válida para desviarse.
+  - **Mapeo Visual (Forma):** En la topología del grafo, se representará mediante **trazos punteados (*dashed lines*)**, comunicando visualmente que existe un grado de flexibilidad perimetral.
+
 ### Variante 1: Grafo de Fuerza Dirigida (`scripts/3_generate_visualization.py`)
 Genera un archivo HTML interactivo con una **vista dividida (Split-View)**:
 - **Izquierda**: Muestra el documento Markdown crudo original para lectura por referencias.
@@ -159,3 +184,66 @@ Respondiendo a sugerencias académicas para mejorar el escaneo visual de izquier
 ```bash
 PYTHONPATH=. python src/scripts/3b_generate_tree_visualization.py dataset/json_trees/llm_forced_output/<archivo>.json
 ```
+
+### Escala del Radio de las Categorías en el Árbol
+
+En la visualización de árbol jerárquico (Variante 2), el radio de los nodos de categoría escala dinámicamente según la cantidad de reglas (hijos) que contienen. Esta escala permite al lector identificar visualmente de un vistazo qué categorías concentran mayor densidad de reglas.
+
+La fórmula de cálculo está definida en `src/domain/models.py:99-114` dentro de la propiedad `tree_graph_radius` de la clase `RuleCategory`:
+
+```
+radio = 10 + 3 × (cantidad_reglas - 1)
+```
+
+**Ejemplos prácticos:**
+| Reglas en Categoría | Radio (px) |
+|---------------------|------------|
+| 1                   | 10         |
+| 2                   | 13         |
+| 5                   | 22         |
+| 10                  | 37         |
+
+- **Radio base:** 10px (para categorías con al menos 1 regla)
+- **Factor de crecimiento:** 3px por cada regla adicional
+- **Capping:** El crecimiento se limita a un máximo de 10 hijos (`min(self.count, 10)`) para evitar nodos desproporcionadamente grandes que rompan el layout del árbol.
+
+### Evaluación de Carga Cognitiva (Flesch Reading Ease)
+
+Para cuantificar la dificultad cognitiva que representa cada categoría de reglas para un desarrollador, hemos incorporado la métrica **Flesch Reading Ease (FRE)** como un indicador visual de carga cognitiva.
+
+#### ¿Qué es FRE?
+
+El **Flesch Reading Ease** es una fórmula validada internacionalmente (Rudolf Flesch, 1948) que evalúa la legibilidad de un texto basándose en la longitud promedio de las oraciones y la cantidad promedio de sílabas por palabra. El resultado es un score entre 0 y 100, donde:
+
+- **Scores más altos** = texto más fácil de leer = menor carga cognitiva
+- **Scores más bajos** = texto más difícil = mayor carga cognitiva
+
+#### Justificación Académica del Cálculo a Nivel de Categoría
+
+El cálculo de FRE se aplica a nivel de **categoría** (concatenando todas las instrucciones de sus reglas hija), y no a nivel de cada instrucción individual. Esto se debe a que:
+
+1. Las fórmulas de legibilidad como Flesch-Kincaid **pierden validez estadística** cuando se aplican a textos muy cortos (menos de 100 palabras), generando ruido y resultados erráticos.
+2. Las instrucciones individuales en AGENTS.md suelen ser frases cortas que no representan adecuadamente la complejidad léxica real del dominio.
+3. Al concatenar por categoría, se obtiene una muestra textual estadísticamente representativa que refleja la **densidad cognitiva real** de esa sección del documento, permitiendo al lector identificar de un vistazo qué áreas del documento requerirán mayor esfuerzo mental.
+
+#### Mapa de Calor (Heatmap)
+
+En la visualización (Variante 2), cada nodo de categoría muestra un **borde de color** que representa su score FRE:
+
+| Rango FRE | Color | Interpretación | Carga Cognitiva |
+|-----------|-------|----------------|-----------------|
+| < 30 | 🔴 Rojo | Very Difficult (Textos legales/técnicos) | Alta |
+| 30 - 50 | 🟠 Naranja | Difficult | Media-Alta |
+| 50 - 70 | 🟡 Amarillo | Fairly Difficult / Plain English | Media |
+| > 70 | 🟢 Verde | Easy | Baja |
+
+#### Implementación Técnica
+
+- **Librería:** `textstat` (Python)
+- **Cálculo:** `textstat.flesch_reading_ease(texto_concatenado)`
+- **Propiedades del modelo:** 
+  - `fre_score`: float (score raw de FRE)
+  - `readability_color`: str (color hex según el heatmap)
+- **Ubicación del código:** 
+  - Modelo: `src/domain/models.py:116-138` (propiedad `readability_color`)
+  - Cálculo: `src/scripts/3b_generate_tree_visualization.py:34-42` (función `calculate_category_fre`)

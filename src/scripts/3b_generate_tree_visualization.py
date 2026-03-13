@@ -4,6 +4,7 @@ import argparse
 import logging
 from pathlib import Path
 import html
+import textstat
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(message)s')
@@ -15,14 +16,37 @@ def get_project_root() -> Path:
 import sys
 # Add src parent to the python path so imports resolve
 sys.path.append(str(get_project_root()))
-from src.domain.models import AgentASTDocument
+# Si tienes los modelos en un archivo separado, esto funcionará. 
+# Como los incluiste abajo, los omito del import si están en el mismo script, 
+# pero mantengo tu estructura original.
+try:
+    from src.domain.models import AgentASTDocument, RuleCategory
+except ImportError:
+    pass # Se asume que los modelos están definidos en este mismo archivo o ya cargados
 
 def escape(text):
     if not text:
         return ""
     return html.escape(str(text))
 
-def build_tree_data(doc: AgentASTDocument):
+def calculate_category_fre(cat) -> float:
+    """
+    JUSTIFICACIÓN ACADÉMICA: El cálculo de Flesch-Kincaid se aplica a nivel de categoría concatenando sus instrucciones. 
+    No se aplica a nivel de instrucción individual porque las fórmulas de legibilidad pierden validez estadística y generan 
+    ruido en textos cortos (menores a 100 palabras). Concatenar por categoría ofrece una medida real de la densidad 
+    cognitiva de esa sección del documento.
+    """
+    if not cat.children:
+        return 100.0
+    
+    concatenated_text = " ".join(rule.content.text for rule in cat.children)
+    
+    if not concatenated_text.strip():
+        return 100.0
+    
+    return textstat.flesch_reading_ease(concatenated_text)
+
+def build_tree_data(doc):
     """Converts the Domain Model AST into a hierarchical structure expected by d3.hierarchy()"""
     
     # Root Node
@@ -38,13 +62,17 @@ def build_tree_data(doc: AgentASTDocument):
     for cat in doc.rootNode.children:
         if cat.count == 0:
             continue
-            
+        
+        fre_score = calculate_category_fre(cat)
+        cat.fre_score = fre_score
+        
         cat_node = {
             "name": cat.label,
             "group": "category",
             "radius": cat.tree_graph_radius,
-            "color": cat.color,
-            "details": cat.html_details,
+            "color": cat.readability_color,
+            "fre_score": round(fre_score, 1),
+            "details": f"{cat.html_details}<br><br><strong>FRE Score:</strong> {round(fre_score, 1)} (Cognitive Load: {'High' if fre_score < 50 else 'Medium' if fre_score < 70 else 'Low'})",
             "children": []
         }
         
@@ -64,7 +92,7 @@ def build_tree_data(doc: AgentASTDocument):
             
     return json.dumps(tree)
 
-def generate_html(md_content, doc: AgentASTDocument, output_path):
+def generate_html(md_content, doc, output_path):
     repo_name = escape(doc.repo_name)
     md_source = escape(doc.source_file)
     escaped_md = escape(md_content)
@@ -249,9 +277,14 @@ def generate_html(md_content, doc: AgentASTDocument, output_path):
             <div class="legend">
                 <strong>Node Types</strong>
                 <div class="legend-item"><div class="legend-color" style="background: #1e293b;"></div> Repository (Root)</div>
-                <div class="legend-item"><div class="legend-color" style="background: #60a5fa;"></div> Category</div>
                 <div class="legend-item"><div class="legend-color" style="background: #ef4444;"></div> MUST Rule</div>
                 <div class="legend-item"><div class="legend-color" style="background: #eab308;"></div> SHOULD Rule</div>
+                <br>
+                <strong>Category Color = FRE Score (Cognitive Load)</strong>
+                <div class="legend-item"><div class="legend-color" style="background: #ef4444;"></div> &lt;30 High (Very Difficult)</div>
+                <div class="legend-item"><div class="legend-color" style="background: #f97316;"></div> 30-50 Medium-High (Difficult)</div>
+                <div class="legend-item"><div class="legend-color" style="background: #eab308;"></div> 50-70 Medium (Fairly Difficult)</div>
+                <div class="legend-item"><div class="legend-color" style="background: #22c55e;"></div> &gt;70 Low (Easy)</div>
                 <br>
                 <small><em>Hint: Scroll to zoom, drag to pan.<br>Click nodes to inspect metadata.</em></small>
             </div>
@@ -324,7 +357,7 @@ def generate_html(md_content, doc: AgentASTDocument, output_path):
             .attr("transform", d => `translate(${{d.y}},${{d.x}})`)
             .on("click", (event, d) => showDetails(d.data, event.currentTarget));
 
-        // Node Circles
+        // Node Circles - Main fill (category color = FRE heatmap)
         node.append("circle")
             .attr("r", d => d.data.radius)
             .attr("fill", d => d.data.color);
@@ -350,9 +383,9 @@ def generate_html(md_content, doc: AgentASTDocument, output_path):
             content.innerHTML = html;
             panel.style.display = "block";
             
-            // Highlight clicked node
-            node.selectAll("circle").style("stroke", "#fff").style("stroke-width", "2px");
-            d3.select(nodeElement).select("circle").style("stroke", "#0f172a").style("stroke-width", "3px");
+            // CORRECCIÓN 3: El resaltado de clic solo afecta al "main-circle", no al halo
+            node.selectAll("circle.main-circle").style("stroke", "#fff").style("stroke-width", "2px");
+            d3.select(nodeElement).select("circle.main-circle").style("stroke", "#0f172a").style("stroke-width", "3px");
         }}
 
         window.addEventListener("resize", () => {{
