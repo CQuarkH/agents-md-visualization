@@ -16,9 +16,6 @@ def get_project_root() -> Path:
 import sys
 # Add src parent to the python path so imports resolve
 sys.path.append(str(get_project_root()))
-# Si tienes los modelos en un archivo separado, esto funcionará. 
-# Como los incluiste abajo, los omito del import si están en el mismo script, 
-# pero mantengo tu estructura original.
 try:
     from src.domain.models import AgentASTDocument, RuleCategory
 except ImportError:
@@ -83,6 +80,7 @@ def build_tree_data(doc):
                 "group": "rule",
                 "radius": rule.tree_graph_radius,
                 "color": rule.color,
+                "raw_text": rule.content.text, 
                 "details": rule.html_details,
                 "strength": rule.metadata.strength,
                 "value": 1
@@ -143,7 +141,7 @@ def generate_html(md_content, doc, output_path):
         }}
         
         .left-pane {{
-            flex: 0 0 35%;
+            flex: 0 0 40%;
             overflow-y: auto;
             padding: 20px;
             background: #ffffff;
@@ -258,7 +256,7 @@ def generate_html(md_content, doc, output_path):
     </div>
     
     <div class="split-container">
-        <div class="left-pane">
+        <div class="left-pane" id="markdown-content">
             <h2 style="font-size: 1.1rem; text-transform: uppercase; color: #64748b; margin-top: 0; padding-bottom: 10px; border-bottom: 1px solid #e2e8f0; margin-bottom: 20px; font-family: sans-serif;">Raw Document ({md_source})</h2>
             {escaped_md}
         </div>
@@ -313,18 +311,13 @@ def generate_html(md_content, doc, output_path):
             
         svg.call(zoom);
 
-        // Define the hierarchy and tree layout
         const root = d3.hierarchy(treeData);
-        
-        // We use a horizontal tree layout
-        // dx is vertical spacing, dy is horizontal depth spacing
         const dx = 25;
         const dy = width / 4; 
         const treeLayout = d3.tree().nodeSize([dx, dy]);
         
         treeLayout(root);
 
-        // Center the tree visually within the view
         let x0 = Infinity;
         let x1 = -x0;
         root.each(d => {{
@@ -335,7 +328,6 @@ def generate_html(md_content, doc, output_path):
         g.attr("transform", `translate(${{dy / 2}},${{height / 2 - (x0 + x1) / 2}})`);
         svg.call(zoom.transform, d3.zoomIdentity.translate(dy / 2, height / 2 - (x0 + x1) / 2));
 
-        // Draw Links
         g.append("g")
             .attr("class", "links")
             .selectAll("path")
@@ -347,7 +339,7 @@ def generate_html(md_content, doc, output_path):
                 .y(d => d.x)
             );
 
-        // Draw Nodes
+        // Nodos reconfigurados: El Highlight ahora se hace AL HACER CLICK.
         const node = g.append("g")
             .attr("class", "nodes")
             .selectAll("g")
@@ -355,14 +347,20 @@ def generate_html(md_content, doc, output_path):
             .join("g")
             .attr("class", "node")
             .attr("transform", d => `translate(${{d.y}},${{d.x}})`)
-            .on("click", (event, d) => showDetails(d.data, event.currentTarget));
+            .on("click", (event, d) => {{
+                showDetails(d.data, event.currentTarget);
+                if (d.data.group === "rule" && d.data.raw_text) {{
+                    highlightTextInLeftPane(d.data.raw_text);
+                }} else {{
+                    clearHighlightInLeftPane();
+                }}
+            }});
 
-        // Node Circles - Main fill (category color = FRE heatmap)
         node.append("circle")
             .attr("r", d => d.data.radius)
-            .attr("fill", d => d.data.color);
+            .attr("fill", d => d.data.color)
+            .attr("class", "main-circle");
 
-        // Node Labels
         node.append("text")
             .attr("dy", "0.31em")
             .attr("x", d => d.children ? -d.data.radius - 6 : d.data.radius + 6)
@@ -372,7 +370,6 @@ def generate_html(md_content, doc, output_path):
             .attr("stroke", "white")
             .attr("stroke-width", 3);
 
-        // Details Panel Function
         function showDetails(nodeData, nodeElement) {{
             const panel = document.getElementById("details-panel");
             const content = document.getElementById("details-content");
@@ -383,7 +380,6 @@ def generate_html(md_content, doc, output_path):
             content.innerHTML = html;
             panel.style.display = "block";
             
-            // CORRECCIÓN 3: El resaltado de clic solo afecta al "main-circle", no al halo
             node.selectAll("circle.main-circle").style("stroke", "#fff").style("stroke-width", "2px");
             d3.select(nodeElement).select("circle.main-circle").style("stroke", "#0f172a").style("stroke-width", "3px");
         }}
@@ -393,6 +389,59 @@ def generate_html(md_content, doc, output_path):
             const newHeight = container.clientHeight;
             svg.attr("width", newWidth).attr("height", newHeight);
         }});
+
+        // Guarda el texto plano original del left pane (una sola vez)
+        const leftPaneEl = document.getElementById("markdown-content");
+        const originalLeftHtml = leftPaneEl.innerHTML;
+
+        function escapeRegex(s) {{
+            return s.replace(/[.*+?^${{}}()|[\\]\\\\]/g, '\\\\$&');
+        }}
+
+        function highlightTextInLeftPane(searchText) {{
+            // 1. Restaurar HTML limpio
+            leftPaneEl.innerHTML = originalLeftHtml;
+
+            if (!searchText || searchText.trim() === "") return;
+
+            try {{
+                // 2. Extraer solo palabras alfanuméricas del raw_text
+                const words = searchText.match(/[A-Za-z0-9\u00C0-\u017F]+/g);
+                if (!words || words.length === 0) return;
+
+                // Limitar palabras para evitar bloqueo en reglas largas
+                const searchWords = words.length > 20 ? [...words.slice(0, 10), ...words.slice(-5)] : words;
+
+                // 3. Escapar cada palabra como literal de regex y unirlas con
+                //    [\\s\\S]{{0,80}}? para permitir cualquier carácter entre ellas
+                //    (incluyendo tags HTML, entidades, saltos de línea, símbolos markdown)
+                const parts = searchWords.map(w => escapeRegex(w));
+                const fuzzyPattern = parts.join('[\\\\s\\\\S]{{0,80}}?');
+                const regex = new RegExp('(' + fuzzyPattern + ')', 'gi');
+
+                let matchFound = false;
+
+                // 4. Aplicar resaltado directamente sobre el innerHTML
+                leftPaneEl.innerHTML = originalLeftHtml.replace(regex, (match) => {{
+                    matchFound = true;
+                    return '<mark style="background-color:#fce7f3;color:#9d174d;padding:2px 0;border-radius:2px;font-weight:bold;box-shadow:0 0 4px #fbcfe8;">' + match + '</mark>';
+                }});
+
+                // 5. Autoscroll al primer match
+                if (matchFound) {{
+                    const mark = leftPaneEl.querySelector("mark");
+                    if (mark) mark.scrollIntoView({{ behavior: 'smooth', block: 'center' }});
+                }} else {{
+                    console.warn("[highlight] No match found for:", searchText);
+                }}
+            }} catch (e) {{
+                console.error("[highlight] Failed:", e);
+            }}
+        }}
+
+        function clearHighlightInLeftPane() {{
+            leftPaneEl.innerHTML = originalLeftHtml;
+        }}
     </script>
 </body>
 </html>
@@ -431,7 +480,6 @@ def main():
         return
 
     root_dir = get_project_root()
-    # Looking for markdown both in the original cache and the experimental folder just in case
     md_path_exp = root_dir / "dataset" / "enriched_agents_temp" / md_source
     md_path_cache = root_dir / "dataset" / "enriched_agents" / md_source
     
