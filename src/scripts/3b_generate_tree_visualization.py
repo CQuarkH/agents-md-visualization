@@ -18,8 +18,9 @@ import sys
 sys.path.append(str(get_project_root()))
 try:
     from src.domain.models import AgentASTDocument, RuleCategory
-except ImportError:
-    pass # Se asume que los modelos están definidos en este mismo archivo o ya cargados
+except ImportError as e:
+    logger.error(f"FATAL ERROR: Missing dependencies. Ensure your virtual environment is activated. Details: {e}")
+    sys.exit(1)
 
 def escape(text):
     if not text:
@@ -36,12 +37,20 @@ def calculate_category_fre(cat) -> float:
     if not cat.children:
         return 100.0
     
-    concatenated_text = " ".join(rule.content.text for rule in cat.children)
+    # Flesch-Kincaid evaluates legibility on text length and syllables. So we concatenate the label's sub-rules.
+    if not hasattr(cat, 'children') or not cat.children:
+        return 100.0
+    
+    concatenated_text = " ".join(rule.content.text for rule in cat.children if hasattr(rule, 'content'))
     
     if not concatenated_text.strip():
         return 100.0
     
-    return textstat.flesch_reading_ease(concatenated_text)
+    try:
+        fre = textstat.flesch_reading_ease(concatenated_text)
+        return max(0.0, fre)  # Dense tech text can be mathematically negative; clamp to 0 for UI bounds
+    except:
+        return 50.0
 
 def build_tree_data(doc):
     """Converts the Domain Model AST into a hierarchical structure expected by d3.hierarchy()"""
@@ -50,8 +59,10 @@ def build_tree_data(doc):
     tree = {
         "name": doc.repo_name,
         "group": "root",
-        "radius": doc.tree_graph_root_radius,
+        "width": doc.tree_width,
+        "height": doc.tree_height,
         "color": doc.root_color,
+        "border_width": 2,
         "details": doc.root_html_details,
         "children": []
     }
@@ -59,32 +70,49 @@ def build_tree_data(doc):
     for cat in doc.rootNode.children:
         if cat.count == 0:
             continue
-        
-        fre_score = calculate_category_fre(cat)
-        cat.fre_score = fre_score
-        
+            
         cat_node = {
             "name": cat.label,
             "group": "category",
-            "radius": cat.tree_graph_radius,
-            "color": cat.readability_color,
-            "fre_score": round(fre_score, 1),
-            "details": f"{cat.html_details}<br><br><strong>FRE Score:</strong> {round(fre_score, 1)} (Cognitive Load: {'High' if fre_score < 50 else 'Medium' if fre_score < 70 else 'Low'})",
+            "width": cat.tree_width,
+            "height": cat.tree_height,
+            "color": cat.color,
+            "border_width": cat.border_width,
+            "details": cat.html_details,
             "children": []
         }
         
-        # Add Rule Nodes
-        for rule in cat.children:
-            cat_node["children"].append({
-                "name": rule.short_label,
-                "group": "rule",
-                "radius": rule.tree_graph_radius,
-                "color": rule.color,
-                "raw_text": rule.content.text, 
-                "details": rule.html_details,
-                "strength": rule.metadata.strength,
-                "value": 1
-            })
+        for label in cat.children:
+            fre_score = calculate_category_fre(label)
+            label.fre_score = fre_score
+            
+            label_node = {
+                "name": label.label,
+                "group": "label",
+                "width": label.tree_width,
+                "height": label.tree_height,
+                "color": label.color,
+                "border_width": label.border_width,
+                "fre_score": round(fre_score, 1),
+                "details": label.html_details,
+                "children": []
+            }
+            
+            for rule in label.children:
+                label_node["children"].append({
+                    "name": rule.short_label,
+                    "group": "rule",
+                    "width": rule.tree_width,
+                    "height": rule.tree_height,
+                    "color": rule.color,
+                    "border_width": 1.5,
+                    "raw_text": rule.content.text, 
+                    "details": rule.html_details,
+                    "strength": rule.metadata.strength,
+                    "value": 1
+                })
+                
+            cat_node["children"].append(label_node)
             
         tree["children"].append(cat_node)
             
@@ -223,9 +251,7 @@ def generate_html(md_content, doc, output_path):
         
         .node text {{
             font-size: 11px;
-            font-family: sans-serif;
-            fill: #334155;
-            text-shadow: 1px 1px 0 #fff, -1px -1px 0 #fff, 1px -1px 0 #fff, -1px 1px 0 #fff;
+            font-family: -apple-system, sans-serif;
             pointer-events: none;
         }}
         
@@ -236,6 +262,7 @@ def generate_html(md_content, doc, output_path):
         }}
 
         .legend {{
+            display: none; /* Temporarily hidden for testing purposes */
             position: absolute;
             bottom: 20px;
             left: 20px;
@@ -273,18 +300,22 @@ def generate_html(md_content, doc, output_path):
             </div>
             
             <div class="legend">
-                <strong>Node Types</strong>
-                <div class="legend-item"><div class="legend-color" style="background: #1e293b;"></div> Repository (Root)</div>
-                <div class="legend-item"><div class="legend-color" style="background: #ef4444;"></div> MUST Rule</div>
-                <div class="legend-item"><div class="legend-color" style="background: #eab308;"></div> SHOULD Rule</div>
+                <strong>Visual Encoding</strong>
+                <div class="legend-item"><div class="legend-color" style="background: #1e293b;"></div> Root Node</div>
+                <div class="legend-item"><div class="legend-color" style="background: #eab308;"></div> Rule Instruction</div>
                 <br>
-                <strong>Category Color = FRE Score (Cognitive Load)</strong>
-                <div class="legend-item"><div class="legend-color" style="background: #ef4444;"></div> &lt;30 High (Very Difficult)</div>
-                <div class="legend-item"><div class="legend-color" style="background: #f97316;"></div> 30-50 Medium-High (Difficult)</div>
-                <div class="legend-item"><div class="legend-color" style="background: #eab308;"></div> 50-70 Medium (Fairly Difficult)</div>
-                <div class="legend-item"><div class="legend-color" style="background: #22c55e;"></div> &gt;70 Low (Easy)</div>
+                <strong>Category & Label Encodings</strong>
+                <div class="legend-item" style="margin-bottom: 2px;">📏 <strong>Height:</strong> Sub-items text density (40-120px)</div>
+                <div class="legend-item" style="margin-bottom: 2px;">↔️ <strong>Width:</strong> Number of nested rules (max 200px)</div>
+                <div class="legend-item">🔳 <strong>Border Density:</strong> Code presence multiplier</div>
                 <br>
-                <small><em>Hint: Scroll to zoom, drag to pan.<br>Click nodes to inspect metadata.</em></small>
+                <strong>Category Color = FRE Score</strong>
+                <div class="legend-item"><div class="legend-color" style="background: #ef4444;"></div> &lt;30 High Load (Complex)</div>
+                <div class="legend-item"><div class="legend-color" style="background: #f97316;"></div> 30-50 Med-High Load</div>
+                <div class="legend-item"><div class="legend-color" style="background: #eab308;"></div> 50-70 Medium Load</div>
+                <div class="legend-item"><div class="legend-color" style="background: #22c55e;"></div> &gt;70 Low Load (Easy)</div>
+                <br>
+                <small><em>Hint: Click nodes to expand/collapse.</em></small>
             </div>
         </div>
     </div>
@@ -311,64 +342,134 @@ def generate_html(md_content, doc, output_path):
             
         svg.call(zoom);
 
-        const root = d3.hierarchy(treeData);
-        const dx = 25;
-        const dy = width / 4; 
-        const treeLayout = d3.tree().nodeSize([dx, dy]);
+        let root = d3.hierarchy(treeData);
+        let i = 0;
         
-        treeLayout(root);
-
-        let x0 = Infinity;
-        let x1 = -x0;
-        root.each(d => {{
-            if (d.x > x1) x1 = d.x;
-            if (d.x < x0) x0 = d.x;
+        // Progressive disclosure: Collapse all labels (depth 1 children) initially
+        root.descendants().forEach(d => {{
+            if (d.depth >= 1) {{ 
+                d._children = d.children;
+                d.children = null;
+            }}
         }});
-        
-        g.attr("transform", `translate(${{dy / 2}},${{height / 2 - (x0 + x1) / 2}})`);
-        svg.call(zoom.transform, d3.zoomIdentity.translate(dy / 2, height / 2 - (x0 + x1) / 2));
 
-        g.append("g")
-            .attr("class", "links")
-            .selectAll("path")
-            .data(root.links())
-            .join("path")
-            .attr("class", "link")
-            .attr("d", d3.linkHorizontal()
-                .x(d => d.y)
-                .y(d => d.x)
-            );
-
-        // Nodos reconfigurados: El Highlight ahora se hace AL HACER CLICK.
-        const node = g.append("g")
-            .attr("class", "nodes")
-            .selectAll("g")
-            .data(root.descendants())
-            .join("g")
-            .attr("class", "node")
-            .attr("transform", d => `translate(${{d.y}},${{d.x}})`)
-            .on("click", (event, d) => {{
-                showDetails(d.data, event.currentTarget);
-                if (d.data.group === "rule" && d.data.raw_text) {{
-                    highlightTextInLeftPane(d.data.raw_text);
-                }} else {{
-                    clearHighlightInLeftPane();
-                }}
+        // Config layout: dx controls base vertical spacing unit, dy controls horizontal depth spread
+        const dx = 1;  
+        const dy = 320; 
+        const treeLayout = d3.tree()
+            .nodeSize([dx, dy])
+            .separation((a, b) => {{
+                // Read exact rectangle height defined by the server (or fallback 40px)
+                const hA = a.data.height || 40;
+                const hB = b.data.height || 40;
+                
+                // Keep 30px vertical padding between the borders of the bounding boxes
+                return (hA + hB) / 2 + 30;
             }});
+        
+        // Containers
+        g.append("g").attr("class", "links");
+        g.append("g").attr("class", "nodes");
+        
+        // Base center
+        g.attr("transform", `translate(${{dy / 2}},${{height / 2}})`);
 
-        node.append("circle")
-            .attr("r", d => d.data.radius)
-            .attr("fill", d => d.data.color)
-            .attr("class", "main-circle");
-
-        node.append("text")
-            .attr("dy", "0.31em")
-            .attr("x", d => d.children ? -d.data.radius - 6 : d.data.radius + 6)
-            .attr("text-anchor", d => d.children ? "end" : "start")
-            .text(d => d.data.name)
-            .clone(true).lower()
-            .attr("stroke", "white")
-            .attr("stroke-width", 3);
+        function update(source) {{
+            treeLayout(root);
+            
+            const nodes = root.descendants();
+            const links = root.links();
+            
+            // LINKS
+            const link = g.select(".links").selectAll("path.link")
+                .data(links, d => d.target.id || (d.target.id = ++i));
+                
+            const linkEnter = link.enter().append("path")
+                .attr("class", "link")
+                .attr("d", d => {{
+                    const o = {{x: source.x0 || source.x, y: source.y0 || source.y}};
+                    return d3.linkHorizontal().x(d => d.y).y(d => d.x)({{source: o, target: o}});
+                }});
+                
+            link.merge(linkEnter).transition().duration(400)
+                .attr("d", d3.linkHorizontal().x(d => d.y).y(d => d.x));
+                
+            link.exit().transition().duration(400)
+                .attr("d", d => {{
+                    const o = {{x: source.x, y: source.y}};
+                    return d3.linkHorizontal().x(d => d.y).y(d => d.x)({{source: o, target: o}});
+                }}).remove();
+                
+            // NODES
+            const node = g.select(".nodes").selectAll("g.node")
+                .data(nodes, d => d.id || (d.id = ++i));
+                
+            const nodeEnter = node.enter().append("g")
+                .attr("class", "node")
+                .attr("transform", d => `translate(${{source.y0 || source.y}},${{source.x0 || source.x}})`)
+                .on("click", (event, d) => {{
+                    showDetails(d.data, event.currentTarget);
+                    if (d.data.group === "rule" && d.data.raw_text) {{
+                        highlightTextInLeftPane(d.data.raw_text);
+                    }} else {{
+                        clearHighlightInLeftPane();
+                    }}
+                    
+                    if (d.children) {{
+                        d._children = d.children;
+                        d.children = null;
+                    }} else if (d._children) {{
+                        d.children = d._children;
+                        d._children = null;
+                    }}
+                    if (d.data.group !== "rule") {{
+                        update(d);
+                    }}
+                }});
+                
+            // Rectangles
+            nodeEnter.append("rect")
+                .attr("class", "main-rect")
+                .attr("width", d => d.data.width || 120)
+                .attr("height", d => d.data.height || 40)
+                .attr("y", d => -(d.data.height || 40) / 2)
+                .attr("rx", 6).attr("ry", 6)
+                .attr("fill", d => d.data.color)
+                .attr("stroke-width", d => d.data.border_width || 2)
+                .attr("stroke", d => d._children ? "#0f172a" : "#cbd5e1");
+                
+            // Text inside Rects
+            nodeEnter.append("text")
+                .attr("dy", "0.31em")
+                .attr("x", 12)
+                .attr("text-anchor", "start")
+                .text(d => d.data.name)
+                .style("fill", d => d.data.group === "root" ? "#fff" : "#0f172a")
+                .style("font-weight", "500");
+                
+            // Transitions
+            const nodeUpdate = nodeEnter.merge(node);
+            
+            nodeUpdate.transition().duration(400)
+                .attr("transform", d => `translate(${{d.y}},${{d.x}})`);
+                
+            nodeUpdate.select("rect").transition().duration(400)
+                .attr("stroke", d => d._children ? "#0f172a" : "#cbd5e1");
+                
+            node.exit().transition().duration(400)
+                .attr("transform", d => `translate(${{source.y}},${{source.x}})`)
+                .style("opacity", 0)
+                .remove();
+                
+            nodes.forEach(d => {{
+                d.x0 = d.x;
+                d.y0 = d.y;
+            }});
+        }}
+        
+        root.x0 = height / 2;
+        root.y0 = 0;
+        update(root);
 
         function showDetails(nodeData, nodeElement) {{
             const panel = document.getElementById("details-panel");
@@ -380,8 +481,8 @@ def generate_html(md_content, doc, output_path):
             content.innerHTML = html;
             panel.style.display = "block";
             
-            node.selectAll("circle.main-circle").style("stroke", "#fff").style("stroke-width", "2px");
-            d3.select(nodeElement).select("circle.main-circle").style("stroke", "#0f172a").style("stroke-width", "3px");
+            d3.selectAll("rect.main-rect").style("stroke", function(d) {{ return d._children ? "#0f172a" : "#cbd5e1"; }});
+            d3.select(nodeElement).select("rect.main-rect").style("stroke", "#0f172a");
         }}
 
         window.addEventListener("resize", () => {{

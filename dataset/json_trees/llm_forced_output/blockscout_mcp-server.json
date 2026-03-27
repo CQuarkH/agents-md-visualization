@@ -10,42 +10,58 @@
     "type": "root",
     "children": [
       {
-        "id": "cat_Architecture",
-        "label": "Architecture",
+        "id": "macro_implementation",
+        "label": "Implementation",
         "type": "category",
         "count": 1,
         "children": [
           {
-            "id": "rule_1",
-            "type": "rule",
-            "content": {
-              "text": "The system is structured into four main directories: mcp-server/ (Root Directory), mcpb/ (MCP Bundle - Development Only), gpt/ (ChatGPT GPT Integration Package), and tests/ (Test Suite).",
-              "originalHeader": "## Overview of Components"
-            },
-            "metadata": {
-              "strength": "SHOULD",
-              "format": "Paragraph"
-            }
+            "id": "cat_Architecture",
+            "label": "Architecture",
+            "type": "label",
+            "count": 1,
+            "children": [
+              {
+                "id": "rule_1",
+                "type": "rule",
+                "content": {
+                  "text": "The system is structured into four main directories: mcp-server/ (Root Directory), mcpb/ (MCP Bundle - Development Only), gpt/ (ChatGPT GPT Integration Package), and tests/ (Test Suite).",
+                  "originalHeader": "## Overview of Components"
+                },
+                "metadata": {
+                  "strength": "SHOULD",
+                  "format": "Paragraph"
+                }
+              }
+            ]
           }
         ]
       },
       {
-        "id": "cat_System_Overview",
-        "label": "System Overview",
+        "id": "macro_general",
+        "label": "General",
         "type": "category",
         "count": 1,
         "children": [
           {
-            "id": "rule_2",
-            "type": "rule",
-            "content": {
-              "text": "The mcp-server/ directory contains the main Python package for the server, including llms.txt for AI crawlers, api/ for REST API implementation, tools/ for tool implementations, and various utility modules like config.py, constants.py, and logging_utils.py.",
-              "originalHeader": "## Overview of Components"
-            },
-            "metadata": {
-              "strength": "SHOULD",
-              "format": "Paragraph"
-            }
+            "id": "cat_System_Overview",
+            "label": "System Overview",
+            "type": "label",
+            "count": 1,
+            "children": [
+              {
+                "id": "rule_2",
+                "type": "rule",
+                "content": {
+                  "text": "The mcp-server/ directory contains the main Python package for the server, including llms.txt for AI crawlers, api/ for REST API implementation, tools/ for tool implementations, and various utility modules like config.py, constants.py, and logging_utils.py.",
+                  "originalHeader": "## Overview of Components"
+                },
+                "metadata": {
+                  "strength": "SHOULD",
+                  "format": "Paragraph"
+                }
+              }
+            ]
           }
         ]
       }

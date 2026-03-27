@@ -4,16 +4,12 @@ import math
 
 # --- Visual Mappings ---
 CATEGORY_COLORS: Dict[str, str] = {
-    "Architecture": "#60a5fa", # Blue 400
-    "System Overview": "#60a5fa", 
-    "Testing": "#4ade80", # Green 400
-    "Test": "#4ade80",
-    "Security": "#f87171", # Red 400
-    "Build and Run": "#c084fc", # Purple 400
-    "Build & Run": "#c084fc",
-    "Impl. Details": "#e879f9", # Fuchsia 400
-    "Implementation Details": "#e879f9",
-    "Documentation": "#94a3b8" # Slate 400
+    "General": "#94a3b8",      # Slate 400
+    "Implementation": "#60a5fa", # Blue 400
+    "Build": "#4ade80",         # Green 400
+    "Management": "#c084fc",    # Purple 400
+    "Quality": "#f87171",       # Red 400
+    "Uncategorized": "#e2e8f0"
 }
 
 DEFAULT_CATEGORY_COLOR = "#94a3b8"
@@ -44,14 +40,36 @@ class AgentRule(BaseModel):
 
     @property
     def graph_id(self) -> str:
-        """Globally unique ID for the graph rendering to prevent collision."""
         if self.parent_id:
             return f"{self.parent_id}_{self.id}"
         return self.id
 
     @property
+    def code_lines(self) -> int:
+        """Counts presence of code-like structural markers to determine density, tolerating LLM backtick wiping"""
+        text = self.content.text
+        count = 0
+        if '`' in text:
+            return 1
+            
+        code_indicators = ['()', '[]', '{}', '=', 'src/', '.rs', '.py', '.ts', '.js', '<', '>', '#[']
+        for ind in code_indicators:
+            if ind in text:
+                return 1
+                
+        return 0
+
+    @property
     def color(self) -> str:
-        return MUST_COLOR if self.metadata.strength == "MUST" else SHOULD_COLOR
+        return SHOULD_COLOR
+        
+    @property
+    def tree_width(self) -> int:
+        return 250
+        
+    @property
+    def tree_height(self) -> int:
+        return 45
 
     @property
     def force_graph_radius(self) -> int:
@@ -69,7 +87,6 @@ class AgentRule(BaseModel):
     @property
     def html_details(self) -> str:
         return f"""
-            <strong>{self.metadata.strength}</strong><br><br>
             {self.content.text}<br><br>
             <hr>
             <small>
@@ -79,79 +96,119 @@ class AgentRule(BaseModel):
             </small>
             """
 
+class RuleLabel(BaseModel):
+    """Intermediate node representing a semantic grouping of rules (formerly Category)."""
+    id: str
+    label: str
+    type: Literal["category", "label"] = "label"
+    count: int
+    children: List[AgentRule] = Field(default_factory=list)
+    fre_score: Optional[float] = None
+    parent_id: Optional[str] = None
+
+    @property
+    def color(self) -> str:
+        # Fallback if frontend doesn't override with category lightness modification
+        return "#e2e8f0" 
+        
+    @property
+    def total_rules(self) -> int:
+        return len(self.children)
+
+    @property
+    def code_lines(self) -> int:
+        return sum(rule.code_lines for rule in self.children)
+        
+    @property
+    def code_ratio(self) -> float:
+        if self.total_rules == 0:
+            return 0.0
+        return self.code_lines / self.total_rules
+        
+    @property
+    def border_width(self) -> float:
+        """Density formulation: 1.5px base + multiplier, max 8px"""
+        bw = 1.5 + (self.code_ratio * 1.5)
+        return min(bw, 8.0)
+        
+    @property
+    def tree_width(self) -> int:
+        """Width = 80 + fre_score. Capped between 80px and 180px."""
+        fre = self.fre_score if self.fre_score is not None else 50
+        width = 80 + fre
+        return max(80, min(180, width))
+        
+    @property
+    def tree_height(self) -> int:
+        """Height = 40 + (rules * 10) capped at 120px"""
+        height = 40 + (self.total_rules * 10)
+        return min(height, 120)
+
+    @property
+    def html_details(self) -> str:
+        fre_val = round(self.fre_score, 1) if self.fre_score is not None else 'N/A'
+        return f"Label: {self.label}<br>Total Rules: {self.count}<br>Code Ratio: {round(self.code_ratio, 2)}<br>FRE Cognitive Load: {fre_val}"
+
+    def inject_parent_ids(self) -> None:
+        for rule in self.children:
+            rule.parent_id = self.id
+
 class RuleCategory(BaseModel):
-    """Intermediate node representing a semantic grouping of rules."""
+    """Macro parent node representing a parent category mapping (General, Implementation, etc)."""
     id: str
     label: str
     type: Literal["category"] = "category"
-    count: int
-    children: List[AgentRule] = Field(default_factory=list)
-    
-    fre_score: Optional[float] = None
+    count: int = 0
+    children: List[RuleLabel] = Field(default_factory=list)
 
     @property
     def color(self) -> str:
         return CATEGORY_COLORS.get(self.label, DEFAULT_CATEGORY_COLOR)
 
     @property
-    def readability_color(self) -> str:
-        """
-        Returns a heatmap color based on the Flesch Reading Ease (FRE) score.
+    def total_rules(self) -> int:
+        return sum(label.total_rules for label in self.children)
         
-        Justification: FRE is a validated, widely-used metric for readability.
-        Lower scores indicate higher cognitive load (complex text), while higher
-        scores indicate easier to read text. This heatmap allows users to quickly
-        identify which categories contain dense, complex instructions that may
-        require more cognitive effort to process.
-        
-        Color mapping:
-        - Score < 30:   Red (Very Difficult / Legal/Technical text - High cognitive load)
-        - Score 30-50:  Orange (Difficult - Moderate-high cognitive load)
-        - Score 50-70:  Yellow (Fairly Difficult / Plain English - Moderate load)
-        - Score > 70:   Green/Blue (Easy - Low cognitive load)
-        """
-        if self.fre_score is None:
-            return "#94a3b8"  # Gray if not calculated
-            
-        if self.fre_score < 30:
-            return "#ef4444"  # Red - Very Difficult
-        elif self.fre_score < 50:
-            return "#f97316"  # Orange - Difficult
-        elif self.fre_score < 70:
-            return "#eab308"  # Yellow - Fairly Difficult
-        else:
-            return "#22c55e"  # Green - Easy
+    @property
+    def total_labels(self) -> int:
+        return len(self.children)
 
     @property
-    def force_graph_radius(self) -> int:
-        return 15 + min(self.count, 10)
+    def code_lines(self) -> int:
+        return sum(label.code_lines for label in self.children)
         
     @property
-    def tree_graph_radius(self) -> int:
-        """
-        Minimum radius: 10 (for 1 child).
-        We use a slightly smaller factor to avoid breaking the tree layout, 
-        but enough to make the node stand out.
-        Examples with growth factor 3:
-        - 1 child: 10 + 3*(0) = 10
-        - 2 children: 10 + 3*(1) = 13
-        - 5 children: 10 + 3*(4) = 22
-        """
-        base_radius = 10
-        growth_factor = 3
+    def code_ratio(self) -> float:
+        if self.total_rules == 0:
+            return 0.0
+        return self.code_lines / self.total_rules
         
-        effective_children = max(1, self.count)
+    @property
+    def border_width(self) -> float:
+        bw = 1.5 + (self.code_ratio * 1.5)
+        return min(bw, 8.0)
         
-        return base_radius + (growth_factor * (effective_children - 1))
+    @property
+    def tree_width(self) -> int:
+        """Width = 140 + (labels * 25) capped at 265px"""
+        width = 140 + (self.total_labels * 25)
+        return min(width, 265)
+        
+    @property
+    def tree_height(self) -> int:
+        """Height = 50 + (total_rules * 8) capped at 150px"""
+        height = 50 + (self.total_rules * 8)
+        return min(height, 150)
 
     @property
     def html_details(self) -> str:
-        return f"Category: {self.label}<br>Total Rules: {self.count}"
+        return f"Category: {self.label}<br>Total Labels: {self.total_labels}<br>Total Rules: {self.total_rules}<br>Code Ratio: {round(self.code_ratio, 2)}"
 
     def inject_parent_ids(self) -> None:
-        """Hydrates the leaf nodes with this category's ID to prevent global collision."""
-        for rule in self.children:
-            rule.parent_id = self.id
+        """Hydrates the labels nodes with this macro category's ID"""
+        for label in self.children:
+            label.parent_id = self.id
+            label.inject_parent_ids()
 
 class ASTProjectInfo(BaseModel):
     """Metadata regarding the origin dataset file."""
@@ -199,6 +256,14 @@ class AgentASTDocument(BaseModel):
     @property
     def tree_graph_root_radius(self) -> int:
         return 15
+        
+    @property
+    def tree_width(self) -> int:
+        return 220
+        
+    @property
+    def tree_height(self) -> int:
+        return 60
         
     @property
     def root_html_details(self) -> str:
